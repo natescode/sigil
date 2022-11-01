@@ -1,0 +1,5 @@
+// test grammar
+start := helloChoice
+hello := 'Hello '
+helloWorld := hello 'World'
+helloChoice := hello 'Mars' | helloWorld
