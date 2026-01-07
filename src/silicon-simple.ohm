@@ -3,12 +3,11 @@ Silicon {
 	Element = | ExpressionStart ";" -- Expression
 			  | FuncDef ";" -- Func
 
+	// TODO : @when and @loop should be built-in functions, not special syntax
 	ExpressionStart = 	
 			| ExpressionStart binOp ExpressionEnd -- binaryExpression
 			| "@let" typedIdentifier "=" ExpressionStart -- letExpression
-			// When 1, 9, 4
-			| "@when" ExpressionStart ","  "{" ExpressionStart "}" "," "{" ExpressionStart "}" -- whenExpression
-            |  "&@loop" intLiteral ".." intLiteral "," Element_Func -- Loop
+            | FunctionCall -- functionCall
             // | Block
 			| ExpressionEnd
 
@@ -45,8 +44,22 @@ Silicon {
 
 	Assign = "=" ExpressionStart
 
-    keyword = "@" identifier
 
+	FunctionCallSigil = "&"
+	FunctionCallBody = 
+		| keyword FunctionArgList? -- builtinFunctionCall
+		| variable FunctionArgList? -- userFunctionCall
+
+	FunctionCall = FunctionCallSigil FunctionCallBody
+
+	FunctionArgList = ListOf<FunctionArg, ",">
+
+	FunctionArg =
+		| intLiteral ".." intLiteral -- rangeArg
+		| "{" ExpressionStart "}" -- blockArg
+		| ExpressionStart -- exprArg
+
+    keyword = "@" identifier
 		variable = identifier
 		stringLiteral = "'" stringChar*  "'"
 			stringChar = ~("'" | "\\" | lineTerminator) any

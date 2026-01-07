@@ -3,7 +3,7 @@ import { IndentStyle } from 'typescript';
 
 /*
 These are the semantics for compiling Silicon into Web Assembly. This version
-c[semantics wrapper for Silicon]ompiles to WAT (Web Assembly text format). Tools like Wat2Wasm.
+compiles to WAT (Web Assembly text format). Wat2Wasm then compiles the WAT to a WASM binary.
 Mac:
     #install
     brew install wabt

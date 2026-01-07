@@ -1,7 +1,7 @@
 console.log("Silicon v2024.01");
 import { toAST } from 'ohm-js/extras'
 import siliconGrammar from './SiliconGrammar';
-import addEvalSemantics from './eval';
+// import addEvalSemantics from './eval';
 import addCompileSemantics from './compile';
 // const evalSemantics = addEvalSemantics(siliconGrammar);
 const compileSemantics = addCompileSemantics(siliconGrammar)
@@ -15,13 +15,13 @@ const compileSemantics = addCompileSemantics(siliconGrammar)
 let result;
 // let sourceCode = `1 + (@let x = 2);`
 // let sourceCode = `5 + 4 - (3 * 2);`
-// let sourceCode = `5 + 4 - 3 * 2;`
+let sourceCode = `5 + 4 - 3 * 2;`
 // let sourceCode = `@fn add:i32 = 1 + 2;`
 // let sourceCode = `@fn add:i32 = 1 + 2; @let foo = 7;`
 // let sourceCode = `@let age:i32 = 33;age;`
 // let sourceCode = `@fn add:i32 a:i32,b:i32 = a + b;`
 // let sourceCode = `@fn foo:i32 = @when 1, { 2 }, { 99 };`
-let sourceCode = `&@loop 1..4, @fn foo:i32 index:i32, value:i32 = 1;;`
+// let sourceCode = `&@loop 1..4, @fn foo:i32 index:i32, value:i32 = index;;
 
 // let sourceCode = `1 + 2;`
 const match = siliconGrammar.match(sourceCode);
@@ -70,4 +70,4 @@ console.log(`AST
 // console.log(`${sc} = ${result}`)
 
 const compileResults = compileSemantics(match).compile();  // Compile the expression.
-Bun.write('main.wat', compileResults)
+Bun.write('../bin/main.wat', compileResults)
