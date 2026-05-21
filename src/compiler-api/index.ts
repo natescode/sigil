@@ -49,15 +49,17 @@ import type {
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface CtxShape {
-    locals:         Map<string, WasmValType>
-    globals:        Map<string, WasmValType>
-    varNames:       Set<string>
-    pendingLocals:  IRLocal[]
-    loopStack:      number[]
-    loopCount:      { n: number }
-    functions:       Map<string, FunctionSig>
-    moduleRegistry?: ModuleRegistry
-    freshIdCounter:  { n: number }
+    locals:              Map<string, WasmValType>
+    globals:             Map<string, WasmValType>
+    varNames:            Set<string>
+    pendingLocals:       IRLocal[]
+    loopStack:           number[]
+    loopCount:           { n: number }
+    functions:           Map<string, FunctionSig>
+    moduleRegistry?:     ModuleRegistry
+    freshIdCounter:      { n: number }
+    /** AST definitions queued by on::module_finalize for post-finalize lowering. */
+    pendingDefinitions:  any[]
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -225,6 +227,11 @@ export interface CompilerAPI {
     error(msg: string, node?: any): never
     /** Build the nested if/else chain for @match. Encapsulates the recursion the body interpreter can't express. */
     expandMatchChain(rawArgs: any[], inferredType: any): IRExpr
+    /** Module-level operations available to on::module_finalize handlers. */
+    module: {
+        /** Queue an AST Definition node for lowering after on::module_finalize completes. */
+        push_definition(def: any): void
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -331,6 +338,10 @@ export function createCompilerAPI(ctx: CtxShape, fns: LowerFns): CompilerAPI {
         error: (msg, node) => {
             throw new CompilerAPIError(`${msg}${formatLoc(node)}`)
         },
+        module: {
+            push_definition: (def) => { ctx.pendingDefinitions.push(def) },
+        },
+
         expandMatchChain: (rawArgs, inferredType) => {
             if (rawArgs.length < 3) return ir.makeNop()
             const discNode = rawArgs[0]

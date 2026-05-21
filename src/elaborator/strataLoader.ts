@@ -34,7 +34,14 @@ import { registerDefKind, type CodegenKind } from './defkinds'
 import { getIRKind } from '../ir/irKinds'
 import { loadBuiltinStrata } from '../strata/index'
 import { builtinDefExpanders } from '../strata/defExpanders'
-import { isRichBody, compileBodyToDefExpander, compileBodyToExpanderFn } from './strataBody'
+import {
+  isRichBody,
+  compileBodyToDefExpander,
+  compileBodyToExpanderFn,
+  compileBodyToDeclHandler,
+  compileBodyToFinalizeHandler,
+  createStateBucket,
+} from './strataBody'
 import { registerExpander } from './registry'
 import parse from '../parser'
 import addToAstSemantics from '../ast/toAst'
@@ -365,11 +372,33 @@ function extractBlockFromNode(node: any): any | undefined {
 }
 
 /**
+ * Evaluate a simple load-time expression in a @stratum body.
+ * Only handles constructs available before a CompilerAPI exists:
+ *   - Literal values (string, int, bool)
+ *   - &Compiler::state 'name' → fresh StateBucket
+ */
+function evalLoadTimeExpr(node: any): any {
+  const n = deepUnwrap(node)
+  if (!n) return undefined
+  if (n.type === 'StringLiteral') return n.value
+  if (n.type === 'IntLiteral') return parseInt(n.value, 10)
+  if (n.type === 'BooleanLiteral') return n.value
+  if (n.type === 'FunctionCall') {
+    const path: string[] = n.name?.path ?? []
+    if (path[0] === 'Compiler' && path[1] === 'state') return createStateBucket()
+  }
+  return undefined
+}
+
+/**
  * Process a `@stratum Name = { body }` definition (Strata 2.0 unified DSL).
  *
  * Walks the body looking for:
- *   - `&Compiler::register::keyword/operator/annotation 'token'` calls
+ *   - `@local name = expr` — load-time bindings (e.g. state buckets)
+ *   - `&Compiler::register::keyword/operator 'token'` calls
  *   - `&Compiler::on::lower NodeParam, { body }` handler registrations
+ *   - `&Compiler::on::decl 'token', NodeParam, { body }` — decl-phase handlers
+ *   - `&Compiler::on::module_finalize { body }` — post-lower handlers
  *
  * For each registration + on::lower pair, creates a synthetic Elaboration and
  * routes it through the existing registerElaboration path so all downstream
@@ -383,14 +412,35 @@ function registerStratumDef(registry: ElaboratorRegistry, elab: Elaboration): vo
   const body = elab.semantics as any  // Block AST from StrataBody
   if (!body || !Array.isArray(body.items)) return
 
+  // Load-time scope: @local bindings evaluated eagerly (e.g. state buckets).
+  const loadTimeScope: Record<string, any> = {}
+
   // Collect everything declared in the body
   const registrations: Array<{ axis: 'operator' | 'keyword', token: string }> = []
   let onLowerNodeParam = 'Node'
   let onLowerBody: any = undefined
 
+  // Collected on::decl and on::module_finalize items — processed after the full walk
+  // so that they can reference tokens registered later in the same body.
+  const onDeclItems: Array<{ token: string | undefined; paramName: string; handlerBody: any }> = []
+  const onFinalizeItems: Array<any> = []
+
   for (const item of body.items as any[]) {
     const node = deepUnwrap(item)
-    if (!node || node.type !== 'FunctionCall') continue
+    if (!node) continue
+
+    // @local name = expr — evaluate eagerly for load-time bindings
+    if (node.type === 'Definition' && node.keyword === '@local') {
+      const name: string | undefined = node.name?.name
+      if (typeof name === 'string') {
+        const binding = Array.isArray(node.binding) ? node.binding[0] : node.binding
+        const expr = binding?.expression ?? binding
+        loadTimeScope[name] = evalLoadTimeExpr(deepUnwrap(expr))
+      }
+      continue
+    }
+
+    if (node.type !== 'FunctionCall') continue
 
     const callName = node.name
     if (!callName || callName.type !== 'Namespace') continue
@@ -415,10 +465,62 @@ function registerStratumDef(registry: ElaboratorRegistry, elab: Elaboration): vo
       } else if (args.length === 1) {
         onLowerBody = extractBlockFromNode(args[0])
       }
+    } else if (path[1] === 'on' && path[2] === 'decl') {
+      // &Compiler::on::decl 'token', NodeParam, { body }   (3 args)
+      // &Compiler::on::decl NodeParam, { body }            (2 args, no explicit token)
+      // &Compiler::on::decl { body }                       (1 arg)
+      const args: any[] = node.args ?? []
+      let token: string | undefined
+      let paramName = 'Node'
+      let handlerBody: any
+      if (args.length >= 3) {
+        token = extractStringFromNode(args[0])
+        paramName = extractIdentFromNode(args[1]) ?? 'Node'
+        handlerBody = extractBlockFromNode(args[args.length - 1])
+      } else if (args.length === 2) {
+        const tok = extractStringFromNode(args[0])
+        if (tok !== undefined) {
+          token = tok
+          handlerBody = extractBlockFromNode(args[1])
+        } else {
+          paramName = extractIdentFromNode(args[0]) ?? 'Node'
+          handlerBody = extractBlockFromNode(args[1])
+        }
+      } else if (args.length === 1) {
+        handlerBody = extractBlockFromNode(args[0])
+      }
+      if (handlerBody !== undefined) {
+        onDeclItems.push({ token, paramName, handlerBody })
+      }
+    } else if (path[1] === 'on' && path[2] === 'module_finalize') {
+      // &Compiler::on::module_finalize { body }
+      const args: any[] = node.args ?? []
+      const handlerBody = args.length >= 1 ? extractBlockFromNode(args[args.length - 1]) : undefined
+      if (handlerBody !== undefined) {
+        onFinalizeItems.push(handlerBody)
+      }
     }
   }
 
-  // Nothing registered or no handler — nothing to do beyond naked registration
+  // Register on::decl handlers — after full walk so all registrations are known
+  for (const { token, paramName, handlerBody } of onDeclItems) {
+    const capturedScope = { ...loadTimeScope }
+    const handler = compileBodyToDeclHandler(handlerBody, paramName, capturedScope)
+    const tokens = token !== undefined ? [token] : registrations.map(r => r.token)
+    for (const t of tokens) {
+      const list = registry.declHandlers.get(t) ?? []
+      if (list.length === 0) registry.declHandlers.set(t, list)
+      list.push(handler)
+    }
+  }
+
+  // Register on::module_finalize handlers
+  for (const handlerBody of onFinalizeItems) {
+    const capturedScope = { ...loadTimeScope }
+    registry.moduleFinalizeHandlers.push(compileBodyToFinalizeHandler(handlerBody, capturedScope))
+  }
+
+  // Nothing registered (no operator/keyword token) — decl/finalize handlers already processed above
   if (registrations.length === 0) return
 
   for (const { axis, token } of registrations) {

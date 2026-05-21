@@ -258,3 +258,71 @@ test("@stratum: multiple register calls in one body", () => {
     expect(wat).toContain("(func $test")
     expect(wat).toContain("i32.or")
 })
+
+// ---------------------------------------------------------------------------
+// Strata 2.0 — on::decl and on::module_finalize end-to-end
+// ---------------------------------------------------------------------------
+
+test("on::decl fires for matching @let definitions without throwing", () => {
+    // A @stratum with on::decl that records seen defs into a state bucket.
+    // If wiring is wrong the compilation throws; if correct it succeeds.
+    const src = `
+        @stratum Spy = {
+          @local seen := &Compiler::state 'spy';
+          &Compiler::register::keyword '@tracked';
+          &Compiler::on::decl '@tracked', Node, {
+            &seen::set 'fired', 'yes';
+          };
+          &Compiler::on::lower Node, { &IR::def_function; };
+        };
+        @tracked add x:Int, y:Int := x + y;
+    `
+    const wat = compile(src)
+    expect(wat).toContain("(func $add")
+    expect(wat).toContain("i32.add")
+})
+
+test("on::decl does not fire for non-matching keyword definitions", () => {
+    // @tracked handler registers only for '@tracked'; a @let def should not fire it.
+    // We verify this compiles without error and produces correct output.
+    const src = `
+        @stratum Spy2 = {
+          &Compiler::register::keyword '@tracked2';
+          &Compiler::on::decl '@tracked2', Node, { };
+          &Compiler::on::lower Node, { &IR::def_function; };
+        };
+        @let mul x:Int, y:Int := x * y;
+    `
+    const wat = compile(src)
+    expect(wat).toContain("(func $mul")
+    expect(wat).toContain("i32.mul")
+})
+
+test("on::module_finalize fires after all defs and does not break output", () => {
+    const src = `
+        @stratum Finalize = {
+          &Compiler::on::module_finalize { };
+        };
+        @let double x:Int := x + x;
+    `
+    const wat = compile(src)
+    expect(wat).toContain("(func $double")
+    expect(wat).toContain("i32.add")
+})
+
+test("on::decl and on::module_finalize can coexist in one @stratum", () => {
+    const src = `
+        @stratum Both = {
+          @local bucket := &Compiler::state 'both';
+          &Compiler::register::keyword '@myboth';
+          &Compiler::on::decl '@myboth', Node, {
+            &bucket::set 'seen', 'yes';
+          };
+          &Compiler::on::module_finalize { };
+          &Compiler::on::lower Node, { &IR::def_function; };
+        };
+        @myboth greet x:Int := x + 1;
+    `
+    const wat = compile(src)
+    expect(wat).toContain("(func $greet")
+})

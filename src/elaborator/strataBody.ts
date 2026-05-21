@@ -32,6 +32,25 @@ import type { IRDefExpander, IRExpanderFn } from '../ir/expander'
 import type { CompilerAPI } from '../compiler-api'
 
 // ---------------------------------------------------------------------------
+// StateBucket — shared mutable store per stratum, captured at load time
+// ---------------------------------------------------------------------------
+
+export interface StateBucket {
+    set(key: string, val: any): void
+    get(key: string): any
+    has(key: string): boolean
+}
+
+export function createStateBucket(): StateBucket {
+    const map = new Map<string, any>()
+    return {
+        set: (key, val) => { map.set(key, val) },
+        get: (key) => map.get(key),
+        has: (key) => map.has(key),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Detection
 // ---------------------------------------------------------------------------
 
@@ -74,6 +93,37 @@ export function compileBodyToExpanderFn(body: any, nodeParamName: string): IRExp
     return (rawArgs, api, inferredType) => {
         const scope: Scope = { [nodeParamName]: rawArgs, inferredType }
         return evalBody(body, scope, api) as ReturnType<IRExpanderFn>
+    }
+}
+
+/**
+ * Compile a rich strata body into an on::decl handler.
+ * The handler fires for each matching Definition before it is lowered.
+ * `outerScope` contains @local bindings captured from the @stratum body at load time.
+ */
+export function compileBodyToDeclHandler(
+    body: any,
+    nodeParamName: string,
+    outerScope: Record<string, any>,
+): (node: any, api: CompilerAPI) => void {
+    return (node, api) => {
+        const scope: Scope = { ...outerScope, [nodeParamName]: node }
+        evalBody(body, scope, api)
+    }
+}
+
+/**
+ * Compile a rich strata body into an on::module_finalize handler.
+ * The handler fires once after all definitions are lowered.
+ * `outerScope` contains @local bindings captured from the @stratum body at load time.
+ */
+export function compileBodyToFinalizeHandler(
+    body: any,
+    outerScope: Record<string, any>,
+): (api: CompilerAPI) => any {
+    return (api) => {
+        const scope: Scope = { ...outerScope }
+        return evalBody(body, scope, api)
     }
 }
 
@@ -186,6 +236,18 @@ function evalCall(node: any, scope: Scope, api: CompilerAPI): any {
     // &Compiler::a::b::c(args) — walk the API object and invoke the method.
     if (path[0] === 'Compiler') {
         return invokeCompilerMethod(path.slice(1), node.args ?? [], scope, api)
+    }
+
+    // &scopeVar::method args — call a method on a scope variable (e.g. a StateBucket).
+    if (path.length >= 2 && path[0] in scope) {
+        const target = scope[path[0]]
+        if (target != null && typeof target === 'object') {
+            const methodName = path[1]
+            if (typeof target[methodName] === 'function') {
+                const args = (node.args ?? []).map((a: any) => evalExpr(a, scope, api))
+                return (target[methodName] as Function).apply(target, args)
+            }
+        }
     }
 
     throw new StrataBodyError(`Unsupported call namespace '${path[0]}' in strata body`)

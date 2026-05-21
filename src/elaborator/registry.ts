@@ -20,6 +20,11 @@ import { type StrataNode } from './strataenum'
 import { type DefKindRegistry, type DefKindEntry, createDefKindRegistry, lookupDefKind as _lookupDefKind } from './defkinds'
 import type { IRExpanderFn, IRDefExpander } from '../ir/expander'
 
+/** Fires for each Definition AST node whose keyword matches a registered token, before lowering. */
+export type DeclHandler = (node: any, api: any) => void
+/** Fires once after all definitions have been lowered. May return IR nodes to append. */
+export type ModuleFinalizeHandler = (api: any) => any
+
 /**
  * Central registry mapping operator/keyword symbols to StrataNode semantics
  * and definition keywords to Def-Kind descriptors.
@@ -32,6 +37,10 @@ export interface ElaboratorRegistry {
     expanders: Map<string, IRExpanderFn>
     /** CodegenKind → IR definition expander (bypasses the lowerDefinition switch). */
     defExpanders: Map<string, IRDefExpander>
+    /** Keyword → handlers fired on each matching Definition before lowering. */
+    declHandlers: Map<string, DeclHandler[]>
+    /** Handlers fired once after all definitions are lowered. */
+    moduleFinalizeHandlers: ModuleFinalizeHandler[]
 }
 
 /**
@@ -45,6 +54,8 @@ export function createElaboratorRegistry(): ElaboratorRegistry {
         defKinds: createDefKindRegistry(),
         expanders: new Map(),
         defExpanders: new Map(),
+        declHandlers: new Map(),
+        moduleFinalizeHandlers: [],
     }
 }
 
@@ -210,11 +221,18 @@ export function hasKeyword(registry: ElaboratorRegistry, name: string): boolean 
  * Useful for combining builtins + user elaborators
  */
 export function mergeRegistries(target: ElaboratorRegistry, source: ElaboratorRegistry): ElaboratorRegistry {
+    const mergedDeclHandlers = new Map(target.declHandlers)
+    for (const [k, v] of source.declHandlers) {
+        const existing = mergedDeclHandlers.get(k) ?? []
+        mergedDeclHandlers.set(k, [...existing, ...v])
+    }
     return {
         operators: { ...target.operators, ...source.operators },
         keywords: { ...target.keywords, ...source.keywords },
         defKinds: { ...target.defKinds, ...source.defKinds },
         expanders: new Map([...target.expanders, ...source.expanders]),
         defExpanders: new Map([...target.defExpanders, ...source.defExpanders]),
+        declHandlers: mergedDeclHandlers,
+        moduleFinalizeHandlers: [...target.moduleFinalizeHandlers, ...source.moduleFinalizeHandlers],
     }
 }

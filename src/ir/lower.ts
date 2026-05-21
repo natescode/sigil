@@ -57,6 +57,8 @@ interface LowerCtx {
     strings: StringAlloc
     /** Monotonic counter for $compiler.freshId() — synthetic identifier allocation. */
     freshIdCounter: { n: number }
+    /** AST definitions queued by on::module_finalize for post-finalize lowering. */
+    pendingDefinitions: any[]
     /** The $compiler API surface exposed to strata expanders. Set after ctx creation. */
     $compiler?: CompilerAPI
 }
@@ -161,6 +163,7 @@ export function lowerProgram(
         pendingLocals: [],
         strings: createStringAlloc(),
         freshIdCounter: { n: 0 },
+        pendingDefinitions: [],
     }
     ctx.$compiler = createCompilerAPI(ctx, lowerFns)
 
@@ -208,6 +211,18 @@ export function lowerProgram(
     for (const exp of ctx.registry.defExpanders.values()) {
         const post = exp.postExpand?.(ctx.$compiler!)
         if (post !== undefined) append(post)
+    }
+
+    // on::module_finalize pass — fire Strata 2.0 finalize handlers once.
+    for (const handler of ctx.registry.moduleFinalizeHandlers) {
+        const result = handler(ctx.$compiler!)
+        if (result !== undefined && result !== null) append(result)
+    }
+
+    // Drain definitions queued by on::module_finalize (e.g. monomorphized clones).
+    const pending = ctx.pendingDefinitions.splice(0)
+    for (const def of pending) {
+        append(lowerDefinition(def, ctx))
     }
 
     // Collect top-level non-definition expression statements into $__start.
@@ -278,6 +293,15 @@ function unwrap(node: any): any {
 function lowerDefinition(node: any, ctx: LowerCtx): any {
     const hook = node.hook
     const name = watId(node.name?.name ?? '')
+
+    // Fire on::decl handlers registered for this definition's keyword (before lowering).
+    const keyword: string | undefined = node.keyword
+    if (keyword) {
+        const handlers = ctx.registry.declHandlers.get(keyword)
+        if (handlers) {
+            for (const handler of handlers) handler(node, ctx.$compiler!)
+        }
+    }
 
     // Def expander takes priority over hardcoded switch cases.
     const defExp = ctx.registry.defExpanders.get(hook)
