@@ -40,6 +40,7 @@ import {
   compileBodyToExpanderFn,
   compileBodyToDeclHandler,
   compileBodyToFinalizeHandler,
+  compileBodyToCallSiteHandler,
   createStateBucket,
 } from './strataBody'
 import { registerExpander } from './registry'
@@ -420,9 +421,10 @@ function registerStratumDef(registry: ElaboratorRegistry, elab: Elaboration): vo
   let onLowerNodeParam = 'Node'
   let onLowerBody: any = undefined
 
-  // Collected on::decl and on::module_finalize items — processed after the full walk
-  // so that they can reference tokens registered later in the same body.
+  // Collected on::decl, on::call_site, and on::module_finalize items — processed after
+  // the full walk so that they can reference tokens registered later in the same body.
   const onDeclItems: Array<{ token: string | undefined; paramName: string; handlerBody: any }> = []
+  const onCallSiteItems: Array<{ paramName: string; handlerBody: any }> = []
   const onFinalizeItems: Array<any> = []
 
   for (const item of body.items as any[]) {
@@ -492,6 +494,21 @@ function registerStratumDef(registry: ElaboratorRegistry, elab: Elaboration): vo
       if (handlerBody !== undefined) {
         onDeclItems.push({ token, paramName, handlerBody })
       }
+    } else if (path[1] === 'on' && path[2] === 'call_site') {
+      // &Compiler::on::call_site NodeParam, { body }   (two args)
+      // &Compiler::on::call_site { body }              (one arg — no explicit param)
+      const args: any[] = node.args ?? []
+      let paramName = 'Node'
+      let handlerBody: any
+      if (args.length >= 2) {
+        paramName = extractIdentFromNode(args[0]) ?? 'Node'
+        handlerBody = extractBlockFromNode(args[args.length - 1])
+      } else if (args.length === 1) {
+        handlerBody = extractBlockFromNode(args[0])
+      }
+      if (handlerBody !== undefined) {
+        onCallSiteItems.push({ paramName, handlerBody })
+      }
     } else if (path[1] === 'on' && path[2] === 'module_finalize') {
       // &Compiler::on::module_finalize { body }
       const args: any[] = node.args ?? []
@@ -512,6 +529,12 @@ function registerStratumDef(registry: ElaboratorRegistry, elab: Elaboration): vo
       if (list.length === 0) registry.declHandlers.set(t, list)
       list.push(handler)
     }
+  }
+
+  // Register on::call_site handlers
+  for (const { paramName, handlerBody } of onCallSiteItems) {
+    const capturedScope = { ...loadTimeScope }
+    registry.callSiteHandlers.push(compileBodyToCallSiteHandler(handlerBody, paramName, capturedScope))
   }
 
   // Register on::module_finalize handlers

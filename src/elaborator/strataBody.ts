@@ -127,6 +127,23 @@ export function compileBodyToFinalizeHandler(
     }
 }
 
+/**
+ * Compile a rich strata body into an on::call_site handler.
+ * The handler fires for every FunctionCall before it is lowered.
+ * Returns the body's result value — a non-null IRExpr replaces normal lowering.
+ * `outerScope` contains @local bindings captured from the @stratum body at load time.
+ */
+export function compileBodyToCallSiteHandler(
+    body: any,
+    nodeParamName: string,
+    outerScope: Record<string, any>,
+): (node: any, api: CompilerAPI) => any {
+    return (node, api) => {
+        const scope: Scope = { ...outerScope, [nodeParamName]: node }
+        return evalBody(body, scope, api)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Interpreter
 // ---------------------------------------------------------------------------

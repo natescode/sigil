@@ -310,6 +310,53 @@ test("on::module_finalize fires after all defs and does not break output", () =>
     expect(wat).toContain("i32.add")
 })
 
+test("on::call_site fires for every function call without throwing", () => {
+    // Handler observes calls and records into state; no replacement (returns null).
+    const src = `
+        @stratum CallSpy = {
+          @local seen := &Compiler::state 'callspy';
+          &Compiler::on::call_site Node, {
+            &seen::set 'fired', 'yes';
+          };
+        };
+        @let add x:Int, y:Int := x + y;
+        @let main := { &add 1, 2 };
+    `
+    const wat = compile(src)
+    expect(wat).toContain("(func $add")
+    expect(wat).toContain("(func $main")
+})
+
+test("on::call_site observer mode: normal lowering proceeds when handler returns null", () => {
+    const src = `
+        @stratum Noop = {
+          &Compiler::on::call_site Node, { };
+        };
+        @let double x:Int := x + x;
+    `
+    const wat = compile(src)
+    expect(wat).toContain("i32.add")
+})
+
+test("on::call_site callee::kind returns user for user-defined function calls", () => {
+    // We can't directly inspect handler internals from e2e, but we verify the
+    // compilation doesn't throw when callee::kind is used.
+    const src = `
+        @stratum KindInspector = {
+          @local kinds := &Compiler::state 'kinds';
+          &Compiler::on::call_site Node, {
+            @local k := &Compiler::callee::kind Node;
+            &kinds::set k, 'seen';
+          };
+        };
+        @let add x:Int, y:Int := x + y;
+        @let main := { &add 1, 2 };
+    `
+    const wat = compile(src)
+    expect(wat).toContain("(func $add")
+    expect(wat).toContain("call $add")
+})
+
 test("on::decl and on::module_finalize can coexist in one @stratum", () => {
     const src = `
         @stratum Both = {

@@ -24,6 +24,8 @@ import type { IRExpanderFn, IRDefExpander } from '../ir/expander'
 export type DeclHandler = (node: any, api: any) => void
 /** Fires once after all definitions have been lowered. May return IR nodes to append. */
 export type ModuleFinalizeHandler = (api: any) => any
+/** Fires for every FunctionCall AST node before it is lowered. Returns an IRExpr to replace normal lowering, or null/undefined to proceed normally. */
+export type CallSiteHandler = (node: any, api: any) => any
 
 /**
  * Central registry mapping operator/keyword symbols to StrataNode semantics
@@ -41,6 +43,8 @@ export interface ElaboratorRegistry {
     declHandlers: Map<string, DeclHandler[]>
     /** Handlers fired once after all definitions are lowered. */
     moduleFinalizeHandlers: ModuleFinalizeHandler[]
+    /** Handlers fired for every FunctionCall before it is lowered. First non-null return wins. */
+    callSiteHandlers: CallSiteHandler[]
 }
 
 /**
@@ -56,6 +60,7 @@ export function createElaboratorRegistry(): ElaboratorRegistry {
         defExpanders: new Map(),
         declHandlers: new Map(),
         moduleFinalizeHandlers: [],
+        callSiteHandlers: [],
     }
 }
 
@@ -234,5 +239,6 @@ export function mergeRegistries(target: ElaboratorRegistry, source: ElaboratorRe
         defExpanders: new Map([...target.defExpanders, ...source.defExpanders]),
         declHandlers: mergedDeclHandlers,
         moduleFinalizeHandlers: [...target.moduleFinalizeHandlers, ...source.moduleFinalizeHandlers],
+        callSiteHandlers: [...target.callSiteHandlers, ...source.callSiteHandlers],
     }
 }

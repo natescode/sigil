@@ -616,6 +616,44 @@ test("@stratum: @local creates load-time binding in declHandler scope (state buc
     expect(typeof handler).toBe('function')
 })
 
+test("@stratum: on::call_site with explicit param registers in callSiteHandlers", () => {
+    const src = `@stratum CallWatcher = {
+      &Compiler::on::call_site Node, { };
+    };`
+    const registry = buildStrataRegistry(parseProgram(src))
+    expect(registry.callSiteHandlers.length).toBe(1)
+    expect(typeof registry.callSiteHandlers[0]).toBe('function')
+})
+
+test("@stratum: on::call_site without param also registers", () => {
+    const src = `@stratum CallWatcher2 = {
+      &Compiler::on::call_site { };
+    };`
+    const registry = buildStrataRegistry(parseProgram(src))
+    expect(registry.callSiteHandlers.length).toBe(1)
+})
+
+test("@stratum: multiple on::call_site handlers accumulate", () => {
+    const src = `
+      @stratum W1 = { &Compiler::on::call_site Node, { }; };
+      @stratum W2 = { &Compiler::on::call_site Node, { }; };
+    `
+    const registry = buildStrataRegistry(parseProgram(src))
+    expect(registry.callSiteHandlers.length).toBe(2)
+})
+
+test("@stratum: on::call_site captures @local state bucket", () => {
+    const src = `@stratum CallSpy = {
+      @local calls := &Compiler::state 'callspy';
+      &Compiler::on::call_site Node, {
+        &calls::set 'fired', 'yes';
+      };
+    };`
+    const registry = buildStrataRegistry(parseProgram(src))
+    expect(registry.callSiteHandlers.length).toBe(1)
+    expect(typeof registry.callSiteHandlers[0]).toBe('function')
+})
+
 test("@stratum: on::decl fires during compilation and can observe the def node", () => {
     // We verify this end-to-end: the handler fires and doesn't throw.
     // Use a state bucket to record fired keywords.

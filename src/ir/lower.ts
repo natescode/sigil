@@ -621,6 +621,15 @@ function lowerBinaryOp(n: any, ctx: LowerCtx): IRExpr {
 }
 
 function lowerFunctionCall(n: any, ctx: LowerCtx): IRExpr {
+    // Fire on::call_site handlers before normal lowering.
+    // First handler that returns a non-null IRExpr wins; null/undefined means "proceed normally".
+    if (ctx.registry.callSiteHandlers.length > 0) {
+        for (const handler of ctx.registry.callSiteHandlers) {
+            const result = handler(n, ctx.$compiler!)
+            if (result != null) return result as IRExpr
+        }
+    }
+
     const name = callName(n)
 
     if (n.isBuiltin) {

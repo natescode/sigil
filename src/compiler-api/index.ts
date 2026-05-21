@@ -232,6 +232,13 @@ export interface CompilerAPI {
         /** Queue an AST Definition node for lowering after on::module_finalize completes. */
         push_definition(def: any): void
     }
+    /** Inspect a FunctionCall AST node from an on::call_site handler. */
+    callee: {
+        /** Returns 'builtin' (keyword call), 'user' (named function call), or 'intrinsic' (WASM/IR direct). */
+        kind(node: any): 'builtin' | 'user' | 'intrinsic'
+        /** Returns the resolved string name of the callee. */
+        name(node: any): string
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -340,6 +347,22 @@ export function createCompilerAPI(ctx: CtxShape, fns: LowerFns): CompilerAPI {
         },
         module: {
             push_definition: (def) => { ctx.pendingDefinitions.push(def) },
+        },
+
+        callee: {
+            kind: (node: any): 'builtin' | 'user' | 'intrinsic' => {
+                if (node?.isBuiltin) return 'builtin'
+                const n = node?.name
+                const path: string[] = Array.isArray(n?.path) ? n.path : []
+                if (path[0] === 'WASM' || path[0] === 'IR') return 'intrinsic'
+                return 'user'
+            },
+            name: (node: any): string => {
+                const n = node?.name
+                if (typeof n === 'string') return n
+                if (Array.isArray(n?.path)) return n.path.join('::')
+                return ''
+            },
         },
 
         expandMatchChain: (rawArgs, inferredType) => {
