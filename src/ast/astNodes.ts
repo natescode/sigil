@@ -101,11 +101,11 @@ export interface Definition {
 
 export interface Elaboration {
     type: 'Elaboration'
-    kind: 'operator' | 'keyword'
-    name: string                // e.g., "Plus"
-    symbol: string              // e.g., "+" for operators, or "@if" for keywords
+    kind: 'operator' | 'keyword' | 'stratum'
+    name: string                // e.g., "Plus" or stratum name
+    symbol: string              // "+" for operators, "@if" for keywords, "" for stratum
     nodeParamName: string       // e.g., "Node" - the variable name for node context
-    semantics?: ExpressionStart // Optional: The body containing semantic rules
+    semantics?: ExpressionStart // body containing semantic rules; for stratum: the outer body block
     sourceLocation?: SourceLocation
 }
 
@@ -322,7 +322,7 @@ export const ASTFactory = {
     },
 
     elaboration(
-        kind: 'operator' | 'keyword',
+        kind: 'operator' | 'keyword' | 'stratum',
         name: string,
         symbol: string,
         nodeParamName: string,

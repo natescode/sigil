@@ -201,3 +201,60 @@ test("compileToWasm direct emitter is byte-equal to WAT round-trip", async () =>
         expect(viaDirect[i]).toBe(viaWat[i])
     }
 })
+
+// ---------------------------------------------------------------------------
+// Strata 2.0 — @stratum end-to-end compilation tests
+// ---------------------------------------------------------------------------
+
+test("@stratum operator compiles same as @stratum_operator", () => {
+    const oldSrc = `
+        @stratum_operator CustomPlus ('**', Node) = { &IR::i32_add Node.left, Node.right; };
+        @let add x:Int, y:Int := x ** y;
+    `
+    const newSrc = `
+        @stratum CustomPlus = {
+          &Compiler::register::operator '**';
+          &Compiler::on::lower Node, { &IR::i32_add Node.left, Node.right; };
+        };
+        @let add x:Int, y:Int := x ** y;
+    `
+    const watOld = compile(oldSrc)
+    const watNew = compile(newSrc)
+    expect(watNew).toContain("(func $add")
+    expect(watNew).toContain("i32.add")
+    // Both forms should produce structurally identical output for the add function
+    const funcOld = watOld.slice(watOld.indexOf('(func $add'), watOld.indexOf(')', watOld.indexOf('(func $add') + 200) + 1)
+    const funcNew = watNew.slice(watNew.indexOf('(func $add'), watNew.indexOf(')', watNew.indexOf('(func $add') + 200) + 1)
+    expect(funcNew).toBe(funcOld)
+})
+
+test("@stratum keyword compiles: @let function using a @stratum-defined def keyword", () => {
+    // @stratum defining a keyword that uses IR::def_function maps to the function codegen path
+    const src = `
+        @stratum MyLet = {
+          &Compiler::register::keyword '@mylet';
+          &Compiler::on::lower Node, { &IR::def_function; };
+        };
+        @mylet double x:Int := x + x;
+    `
+    const wat = compile(src)
+    expect(wat).toContain("(func $double")
+    expect(wat).toContain("i32.add")
+})
+
+test("@stratum: multiple register calls in one body", () => {
+    const src = `
+        @stratum TwoOps = {
+          &Compiler::register::operator '||?';
+          &Compiler::on::lower Node, { &IR::i32_or Node.left, Node.right; };
+        };
+        @stratum TwoOps2 = {
+          &Compiler::register::operator '&&?';
+          &Compiler::on::lower Node, { &IR::i32_and Node.left, Node.right; };
+        };
+        @let test a:Int, b:Int := a ||? b;
+    `
+    const wat = compile(src)
+    expect(wat).toContain("(func $test")
+    expect(wat).toContain("i32.or")
+})

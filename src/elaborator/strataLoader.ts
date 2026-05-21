@@ -35,6 +35,7 @@ import { getIRKind } from '../ir/irKinds'
 import { loadBuiltinStrata } from '../strata/index'
 import { builtinDefExpanders } from '../strata/defExpanders'
 import { isRichBody, compileBodyToDefExpander, compileBodyToExpanderFn } from './strataBody'
+import { registerExpander } from './registry'
 import parse from '../parser'
 import addToAstSemantics from '../ast/toAst'
 import siliconGrammar from '../grammar/SiliconGrammar'
@@ -105,6 +106,10 @@ export function buildStrataRegistry(
 
 /** Register a single Elaboration node into the registry. */
 function registerElaboration(registry: ElaboratorRegistry, elab: Elaboration): void {
+  if (elab.kind === 'stratum') {
+    registerStratumDef(registry, elab)
+    return
+  }
   const baseNode = elaborationToStrataNode(elab)
   const symbol = symbolToString(elab.symbol)
   const sig = baseNode.data?.typeSignature
@@ -318,4 +323,146 @@ function findNamespace(node: any): any {
     }
   }
   return undefined
+}
+
+// ---------------------------------------------------------------------------
+// Strata 2.0 — @stratum registration DSL
+// ---------------------------------------------------------------------------
+
+/**
+ * Peel off wrapper nodes (Element / Item / Statement / ExpressionStart /
+ * ExpressionEnd / Literal) down to the inner semantic node.
+ */
+function deepUnwrap(node: any): any {
+  if (!node || typeof node !== 'object') return node
+  const wrappers = new Set(['Element', 'Item', 'Statement', 'ExpressionStart', 'ExpressionEnd', 'Literal'])
+  if (wrappers.has(node.type)) return deepUnwrap(node.value)
+  return node
+}
+
+/** Extract a string literal value from an AST node. */
+function extractStringFromNode(node: any): string | undefined {
+  const n = deepUnwrap(node)
+  if (!n) return undefined
+  if (n.type === 'StringLiteral') return n.value
+  return undefined
+}
+
+/** Extract a single-segment identifier from a Namespace node. */
+function extractIdentFromNode(node: any): string | undefined {
+  const n = deepUnwrap(node)
+  if (!n) return undefined
+  if (n.type === 'Namespace' && Array.isArray(n.path) && n.path.length === 1) return n.path[0]
+  return undefined
+}
+
+/** Extract a Block node from an AST node. */
+function extractBlockFromNode(node: any): any | undefined {
+  const n = deepUnwrap(node)
+  if (!n) return undefined
+  if (n.type === 'Block') return n
+  return undefined
+}
+
+/**
+ * Process a `@stratum Name = { body }` definition (Strata 2.0 unified DSL).
+ *
+ * Walks the body looking for:
+ *   - `&Compiler::register::keyword/operator/annotation 'token'` calls
+ *   - `&Compiler::on::lower NodeParam, { body }` handler registrations
+ *
+ * For each registration + on::lower pair, creates a synthetic Elaboration and
+ * routes it through the existing registerElaboration path so all downstream
+ * machinery (codegenKind lookup, defExpander, expander) works unchanged.
+ *
+ * New keywords/operators without an &IR::* intrinsic in the handler body use
+ * a synthetic 'user::token' intrinsic key so lowerBuiltinCall can dispatch to
+ * the compiled expander.
+ */
+function registerStratumDef(registry: ElaboratorRegistry, elab: Elaboration): void {
+  const body = elab.semantics as any  // Block AST from StrataBody
+  if (!body || !Array.isArray(body.items)) return
+
+  // Collect everything declared in the body
+  const registrations: Array<{ axis: 'operator' | 'keyword', token: string }> = []
+  let onLowerNodeParam = 'Node'
+  let onLowerBody: any = undefined
+
+  for (const item of body.items as any[]) {
+    const node = deepUnwrap(item)
+    if (!node || node.type !== 'FunctionCall') continue
+
+    const callName = node.name
+    if (!callName || callName.type !== 'Namespace') continue
+    const path: string[] = callName.path ?? []
+    if (path[0] !== 'Compiler') continue
+
+    if (path[1] === 'register') {
+      // &Compiler::register::keyword/operator/annotation 'token'
+      const axis = path[2] as string
+      if (axis !== 'keyword' && axis !== 'operator') continue  // annotation deferred
+      const token = extractStringFromNode((node.args ?? [])[0])
+      if (token !== undefined) {
+        registrations.push({ axis: axis as 'keyword' | 'operator', token })
+      }
+    } else if (path[1] === 'on' && path[2] === 'lower') {
+      // &Compiler::on::lower NodeParam, { body }   (two args)
+      // &Compiler::on::lower { body }              (one arg — no explicit param)
+      const args: any[] = node.args ?? []
+      if (args.length >= 2) {
+        onLowerNodeParam = extractIdentFromNode(args[0]) ?? 'Node'
+        onLowerBody = extractBlockFromNode(args[args.length - 1])
+      } else if (args.length === 1) {
+        onLowerBody = extractBlockFromNode(args[0])
+      }
+    }
+  }
+
+  // Nothing registered or no handler — nothing to do beyond naked registration
+  if (registrations.length === 0) return
+
+  for (const { axis, token } of registrations) {
+    if (onLowerBody === undefined) {
+      // Naked registration: register a minimal StrataNode with no body
+      const nakedNode: StrataNode = {
+        type: axis === 'operator' ? StrataType.Operator : StrataType.Keyword,
+        discriminant: token,
+        data: { nodeParamName: 'Node', intrinsic: undefined, bodyTemplate: undefined },
+      }
+      registerElaborator(registry, axis, token, nakedNode)
+      continue
+    }
+
+    const intrinsic = extractIntrinsicFromBody(onLowerBody)
+
+    if (intrinsic !== undefined) {
+      // Body has an &IR::* / &WASM::* intrinsic marker — use existing path.
+      const syntheticElab: Elaboration = {
+        type: 'Elaboration',
+        kind: axis,
+        name: elab.name,
+        symbol: token,
+        nodeParamName: onLowerNodeParam,
+        semantics: onLowerBody,
+      }
+      registerElaboration(registry, syntheticElab)
+    } else {
+      // No intrinsic marker — new keyword/operator defined purely via Compiler API.
+      // Use a synthetic intrinsic key so lowerBuiltinCall can dispatch.
+      const syntheticKey = `user::${token}`
+      const strataNode: StrataNode = {
+        type: axis === 'operator' ? StrataType.Operator : StrataType.Keyword,
+        discriminant: token,
+        data: {
+          nodeParamName: onLowerNodeParam,
+          intrinsic: syntheticKey,
+          bodyTemplate: extractBodyTemplate(onLowerBody as any, onLowerNodeParam),
+        },
+      }
+      registerElaborator(registry, axis, token, strataNode)
+      if (isRichBody(onLowerBody)) {
+        registerExpander(registry, syntheticKey, compileBodyToExpanderFn(onLowerBody, onLowerNodeParam))
+      }
+    }
+  }
 }

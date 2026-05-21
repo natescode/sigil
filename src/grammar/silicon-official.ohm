@@ -73,11 +73,13 @@ Silicon {
   Elaboration =
     | "@stratum_operator" OperatorDefinition -- operator
     | "@stratum_keyword" KeywordDefinition -- keyword
+    | "@stratum" StratumDef -- stratum
   OperatorDefinition = identifier "(" OperatorSymbol "," identifier ")" "=" StrataBody
   KeywordDefinition = identifier "(" KeywordName "," identifier ")" "=" StrataBody
   OperatorSymbol = stringLiteral
   KeywordName = stringLiteral
   StrataBody = "{" (Item ";")* "}"
+  StratumDef = identifier "=" StrataBody
   
   typedIdentifier = identifier type?
   type = ":" identifier

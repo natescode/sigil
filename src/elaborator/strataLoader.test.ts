@@ -460,3 +460,97 @@ test("buildStrataRegistry: expanders map is a Map instance", () => {
     const registry = buildStrataRegistry(ASTFactory.program([]))
     expect(registry.expanders).toBeInstanceOf(Map)
 })
+
+// ---------------------------------------------------------------------------
+// Strata 2.0 — @stratum registration DSL
+// ---------------------------------------------------------------------------
+
+function parseProgram(src: string) {
+    const match = parse(src)
+    return addToAstSemantics(siliconGrammar)(match).toAst() as any
+}
+
+test("@stratum: parses without error", () => {
+    const prog = parseProgram(`@stratum MyOp = { &Compiler::register::operator '??'; };`)
+    expect(prog).toBeDefined()
+    expect(prog.type).toBe('Program')
+})
+
+test("@stratum: register::operator registers the operator", () => {
+    const src = `@stratum MyOp = {
+      &Compiler::register::operator '??';
+      &Compiler::on::lower Node, { &WASM::i32_add Node.left, Node.right; };
+    };`
+    const registry = buildStrataRegistry(parseProgram(src))
+    expect(registry.operators['??']).toBeDefined()
+    expect(registry.operators['??'].discriminant).toBe('??')
+})
+
+test("@stratum: operator on::lower extracts intrinsic correctly", () => {
+    const src = `@stratum MyOp = {
+      &Compiler::register::operator '??';
+      &Compiler::on::lower Node, { &WASM::i32_add Node.left, Node.right; };
+    };`
+    const registry = buildStrataRegistry(parseProgram(src))
+    expect(registry.operators['??'].data?.intrinsic).toBe('WASM::i32_add')
+})
+
+test("@stratum: operator produces same bodyTemplate as @stratum_operator", () => {
+    const oldSrc = `@stratum_operator MyOp ('??', Node) = { &WASM::i32_add Node.left, Node.right; };`
+    const newSrc = `@stratum MyOp = {
+      &Compiler::register::operator '??';
+      &Compiler::on::lower Node, { &WASM::i32_add Node.left, Node.right; };
+    };`
+    const r1 = buildStrataRegistry(parseProgram(oldSrc))
+    const r2 = buildStrataRegistry(parseProgram(newSrc))
+    expect(r2.operators['??'].data?.intrinsic).toBe(r1.operators['??'].data?.intrinsic)
+    expect(r2.operators['??'].data?.bodyTemplate).toEqual(r1.operators['??'].data?.bodyTemplate)
+})
+
+test("@stratum: register::keyword registers the keyword", () => {
+    const src = `@stratum MyKw = {
+      &Compiler::register::keyword '@mykw';
+      &Compiler::on::lower Node, { &IR::control_break; };
+    };`
+    const registry = buildStrataRegistry(parseProgram(src))
+    expect(registry.keywords['@mykw']).toBeDefined()
+    expect(registry.keywords['@mykw'].discriminant).toBe('@mykw')
+})
+
+test("@stratum: keyword on::lower extracts intrinsic correctly", () => {
+    const src = `@stratum MyKw = {
+      &Compiler::register::keyword '@mykw';
+      &Compiler::on::lower Node, { &IR::control_break; };
+    };`
+    const registry = buildStrataRegistry(parseProgram(src))
+    expect(registry.keywords['@mykw'].data?.intrinsic).toBe('IR::control_break')
+})
+
+test("@stratum: keyword produces same intrinsic as @stratum_keyword", () => {
+    const oldSrc = `@stratum_keyword MyKw ('@mykw', Node) = { &IR::control_break; };`
+    const newSrc = `@stratum MyKw = {
+      &Compiler::register::keyword '@mykw';
+      &Compiler::on::lower Node, { &IR::control_break; };
+    };`
+    const r1 = buildStrataRegistry(parseProgram(oldSrc))
+    const r2 = buildStrataRegistry(parseProgram(newSrc))
+    expect(r2.keywords['@mykw'].data?.intrinsic).toBe(r1.keywords['@mykw'].data?.intrinsic)
+})
+
+test("@stratum: naked registration (no on::lower) registers with no intrinsic", () => {
+    const src = `@stratum Naked = { &Compiler::register::keyword '@naked'; };`
+    const registry = buildStrataRegistry(parseProgram(src))
+    expect(registry.keywords['@naked']).toBeDefined()
+    expect(registry.keywords['@naked'].data?.intrinsic).toBeUndefined()
+})
+
+test("@stratum: new keyword without IR intrinsic uses synthetic user:: key", () => {
+    const src = `@stratum NewKw = {
+      &Compiler::register::keyword '@newkw';
+      &Compiler::on::lower Node, { &Compiler::ir::makeReturn &Compiler::arg Node, 0; };
+    };`
+    const registry = buildStrataRegistry(parseProgram(src))
+    expect(registry.keywords['@newkw']).toBeDefined()
+    expect(registry.keywords['@newkw'].data?.intrinsic).toBe('user::@newkw')
+    expect(registry.expanders.has('user::@newkw')).toBe(true)
+})

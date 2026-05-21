@@ -107,6 +107,16 @@ export default function addToAstSemantics(siliconGrammar: ohm.Grammar): ohm.Sema
             return def.toAst()
         },
 
+        Elaboration_stratum(_keyword, def) {
+            return def.toAst()
+        },
+
+        StratumDef(name, _eq, body) {
+            const stratumName = name.sourceString
+            const bodyAst = body.toAst()
+            return ASTFactory.elaboration('stratum', stratumName, '', '', bodyAst)
+        },
+
         OperatorDefinition(name, _open, symbol, _comma, nodeParam, _close, _eq, body) {
             const elaborationName = name.sourceString
             const operatorSymbol = symbol.toAst()
