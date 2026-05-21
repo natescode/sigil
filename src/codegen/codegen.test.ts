@@ -357,6 +357,86 @@ test("on::call_site callee::kind returns user for user-defined function calls", 
     expect(wat).toContain("call $add")
 })
 
+// ---------------------------------------------------------------------------
+// Strata 2.0 — ast:: synthesis (capture_template, clone, substitute, re_elaborate)
+// ---------------------------------------------------------------------------
+
+test("ast::capture_template returns the def node (template handle)", () => {
+    // on::decl captures a template; we verify the compilation doesn't throw and
+    // the function is still emitted normally via the regular lowering path.
+    const src = `
+        @stratum CaptureTest = {
+          @local tmpls := &Compiler::state 'capture';
+          &Compiler::register::keyword '@capturedlet';
+          &Compiler::on::decl '@capturedlet', Node, {
+            @local name := &Compiler::watId Node.name.name;
+            @local tmpl := &Compiler::ast::capture_template Node, 'pre';
+            &tmpls::set name, tmpl;
+          };
+          &Compiler::on::lower Node, { &IR::def_function; };
+        };
+        @capturedlet add x:Int, y:Int := x + y;
+    `
+    const wat = compile(src)
+    expect(wat).toContain("(func $add")
+    expect(wat).toContain("i32.add")
+})
+
+test("ast::clone + ast::substitute produce a renamed function via module::push_definition", () => {
+    // Capture @capturedlet, clone it, substitute 'add' → 'add_cloned', push as a new def.
+    // We verify the cloned function appears in the WAT output.
+    const src = `
+        @stratum CloneTest = {
+          @local tmpls := &Compiler::state 'clone';
+          &Compiler::register::keyword '@clonable';
+          &Compiler::on::decl '@clonable', Node, {
+            @local name := &Compiler::watId Node.name.name;
+            @local tmpl := &Compiler::ast::capture_template Node, 'pre';
+            &tmpls::set name, tmpl;
+          };
+          &Compiler::on::module_finalize {
+            @local tmpl := &tmpls::get 'mul';
+            @local fresh := &Compiler::ast::clone tmpl;
+            @local bindings := &Compiler::state 'instance';
+            &bindings::set 'mul', 'mul_copy';
+            @local patched := &Compiler::ast::substitute fresh, bindings;
+            @local reeled := &Compiler::ast::re_elaborate patched;
+            &Compiler::module::push_definition reeled;
+          };
+          &Compiler::on::lower Node, { &IR::def_function; };
+        };
+        @clonable mul x:Int, y:Int := x * y;
+    `
+    const wat = compile(src)
+    expect(wat).toContain("(func $mul")
+    expect(wat).toContain("(func $mul_copy")
+    expect(wat).toContain("i32.mul")
+})
+
+test("ast::patch_types does not throw on a post-template", () => {
+    const src = `
+        @stratum PatchTest = {
+          @local tmpls := &Compiler::state 'patch';
+          &Compiler::register::keyword '@patchable';
+          &Compiler::on::decl '@patchable', Node, {
+            @local tmpl := &Compiler::ast::capture_template Node, 'post';
+            &tmpls::set 'stored', tmpl;
+          };
+          &Compiler::on::module_finalize {
+            @local tmpl := &tmpls::get 'stored';
+            @local fresh := &Compiler::ast::clone tmpl;
+            @local bindings := &Compiler::state 'instance';
+            &bindings::set 'Int', 'Int';
+            &Compiler::ast::patch_types fresh, bindings;
+          };
+          &Compiler::on::lower Node, { &IR::def_function; };
+        };
+        @patchable identity x:Int := x;
+    `
+    const wat = compile(src)
+    expect(wat).toContain("(func $identity")
+})
+
 test("on::decl and on::module_finalize can coexist in one @stratum", () => {
     const src = `
         @stratum Both = {

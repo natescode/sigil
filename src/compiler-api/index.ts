@@ -19,6 +19,25 @@ import { resolveIntrinsicWasmInstr } from '../intrinsics'
 import { wasmTypeOf } from '../types/types'
 
 // ─────────────────────────────────────────────────────────────────────────────
+// StateBucket — shared mutable state per stratum, usable at load-time and run-time
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface StateBucket {
+    set(key: string, val: any): void
+    get(key: string): any
+    has(key: string): boolean
+}
+
+export function createStateBucket(): StateBucket {
+    const map = new Map<string, any>()
+    return {
+        set: (k, v) => { map.set(k, v) },
+        get: k => map.get(k),
+        has: k => map.has(k),
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Errors raised from inside CompilerAPI calls (e.g. assertDefined, error)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -60,6 +79,8 @@ interface CtxShape {
     freshIdCounter:      { n: number }
     /** AST definitions queued by on::module_finalize for post-finalize lowering. */
     pendingDefinitions:  any[]
+    /** Re-elaborate a single cloned AST node using the current registry. Set by lowerProgram. */
+    reElaborateNode:     (node: any) => any
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -227,6 +248,8 @@ export interface CompilerAPI {
     error(msg: string, node?: any): never
     /** Build the nested if/else chain for @match. Encapsulates the recursion the body interpreter can't express. */
     expandMatchChain(rawArgs: any[], inferredType: any): IRExpr
+    /** Create a fresh StateBucket — a named mutable map for stratum-local state. */
+    state(name?: string): StateBucket
     /** Module-level operations available to on::module_finalize handlers. */
     module: {
         /** Queue an AST Definition node for lowering after on::module_finalize completes. */
@@ -239,6 +262,118 @@ export interface CompilerAPI {
         /** Returns the resolved string name of the callee. */
         name(node: any): string
     }
+    /** AST synthesis operations — capture, clone, substitute, re-elaborate. */
+    ast: {
+        /**
+         * Capture an AST node as a reusable template handle.
+         * `kind` is 'pre' (un-elaborated) or 'post' (elaborated with semantics stamped).
+         * The handle is the node itself; capture is O(1) — clone before mutating.
+         */
+        capture_template(node: any, kind: 'pre' | 'post'): any
+        /** Return a deep copy of `handle`. Required before calling substitute/patch_types. */
+        clone(handle: any): any
+        /**
+         * Walk `handle` recursively and replace every type annotation typename and
+         * identifier name that matches a key in `bindings` with the bound string value.
+         * `bindings` may be a StateBucket, a JS Map, or a plain object.
+         * Returns the mutated handle (mutation is in-place on the clone).
+         */
+        substitute(handle: any, bindings: any): any
+        /**
+         * Re-run the elaboration pass on a cloned AST node using the current registry.
+         * Required after substitute on a 'pre'-kind template to stamp operator semantics
+         * and definition hooks onto the new tree.
+         */
+        re_elaborate(handle: any): any
+        /**
+         * Walk `handle` and replace only TypeAnnotation typenames matching keys in
+         * `bindings`. Lighter than substitute; use for post-elaboration templates where
+         * only type annotations need updating.
+         */
+        patch_types(handle: any, bindings: any): any
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AST synthesis helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Resolve a key from a bindings argument that may be a StateBucket, Map, or plain object. */
+function bindingsGet(bindings: any, key: string): string | undefined {
+    if (!bindings) return undefined
+    if (typeof bindings.get === 'function') {
+        const v = bindings.get(key)
+        return typeof v === 'string' ? v : undefined
+    }
+    const v = (bindings as Record<string, any>)[key]
+    return typeof v === 'string' ? v : undefined
+}
+
+/** Deep-clone an AST node via JSON round-trip. */
+function deepCloneNode(node: any): any {
+    return JSON.parse(JSON.stringify(node))
+}
+
+/**
+ * Walk an AST node tree, replacing TypeAnnotation typenames and identifier names
+ * (TypedIdentifier.name, Namespace path segments, Parameter.name) that match keys
+ * in `bindings`. Returns the mutated node (call clone() first).
+ */
+function substituteNode(node: any, bindings: any): any {
+    if (!node || typeof node !== 'object') return node
+    if (Array.isArray(node)) {
+        for (let i = 0; i < node.length; i++) node[i] = substituteNode(node[i], bindings)
+        return node
+    }
+    if (node.type === 'TypeAnnotation') {
+        const repl = bindingsGet(bindings, node.typename)
+        if (repl !== undefined) node.typename = repl
+        return node
+    }
+    if (node.type === 'TypedIdentifier') {
+        const repl = bindingsGet(bindings, node.name)
+        if (repl !== undefined) node.name = repl
+        if (node.typeAnnotation) substituteNode(node.typeAnnotation, bindings)
+        return node
+    }
+    if (node.type === 'Namespace' && Array.isArray(node.path)) {
+        node.path = node.path.map((seg: string) => bindingsGet(bindings, seg) ?? seg)
+        return node
+    }
+    if (node.type === 'Parameter') {
+        const repl = bindingsGet(bindings, node.name)
+        if (repl !== undefined) node.name = repl
+        if (node.typeAnnotation) substituteNode(node.typeAnnotation, bindings)
+        return node
+    }
+    // Recurse into all other object properties.
+    for (const key of Object.keys(node)) {
+        if (key === 'sourceLocation' || key === 'inferredType') continue
+        if (typeof node[key] === 'object') node[key] = substituteNode(node[key], bindings)
+    }
+    return node
+}
+
+/**
+ * Walk an AST node tree, replacing ONLY TypeAnnotation typenames that match keys
+ * in `bindings`. Lighter than substituteNode; use for post-elaboration clones.
+ */
+function patchTypesNode(node: any, bindings: any): any {
+    if (!node || typeof node !== 'object') return node
+    if (Array.isArray(node)) {
+        for (let i = 0; i < node.length; i++) node[i] = patchTypesNode(node[i], bindings)
+        return node
+    }
+    if (node.type === 'TypeAnnotation') {
+        const repl = bindingsGet(bindings, node.typename)
+        if (repl !== undefined) node.typename = repl
+        return node
+    }
+    for (const key of Object.keys(node)) {
+        if (key === 'sourceLocation' || key === 'inferredType') continue
+        if (typeof node[key] === 'object') node[key] = patchTypesNode(node[key], bindings)
+    }
+    return node
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -345,6 +480,8 @@ export function createCompilerAPI(ctx: CtxShape, fns: LowerFns): CompilerAPI {
         error: (msg, node) => {
             throw new CompilerAPIError(`${msg}${formatLoc(node)}`)
         },
+        state: (_name?: string) => createStateBucket(),
+
         module: {
             push_definition: (def) => { ctx.pendingDefinitions.push(def) },
         },
@@ -363,6 +500,14 @@ export function createCompilerAPI(ctx: CtxShape, fns: LowerFns): CompilerAPI {
                 if (Array.isArray(n?.path)) return n.path.join('::')
                 return ''
             },
+        },
+
+        ast: {
+            capture_template: (node: any, _kind: 'pre' | 'post') => node,
+            clone: (handle: any) => deepCloneNode(handle),
+            substitute: (handle: any, bindings: any) => substituteNode(handle, bindings),
+            re_elaborate: (handle: any) => ctx.reElaborateNode(handle),
+            patch_types: (handle: any, bindings: any) => patchTypesNode(handle, bindings),
         },
 
         expandMatchChain: (rawArgs, inferredType) => {

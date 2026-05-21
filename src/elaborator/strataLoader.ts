@@ -41,8 +41,8 @@ import {
   compileBodyToDeclHandler,
   compileBodyToFinalizeHandler,
   compileBodyToCallSiteHandler,
-  createStateBucket,
 } from './strataBody'
+import { createStateBucket } from '../compiler-api'
 import { registerExpander } from './registry'
 import parse from '../parser'
 import addToAstSemantics from '../ast/toAst'

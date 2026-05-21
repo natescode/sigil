@@ -30,25 +30,8 @@
 
 import type { IRDefExpander, IRExpanderFn } from '../ir/expander'
 import type { CompilerAPI } from '../compiler-api'
-
-// ---------------------------------------------------------------------------
-// StateBucket — shared mutable store per stratum, captured at load time
-// ---------------------------------------------------------------------------
-
-export interface StateBucket {
-    set(key: string, val: any): void
-    get(key: string): any
-    has(key: string): boolean
-}
-
-export function createStateBucket(): StateBucket {
-    const map = new Map<string, any>()
-    return {
-        set: (key, val) => { map.set(key, val) },
-        get: (key) => map.get(key),
-        has: (key) => map.has(key),
-    }
-}
+import { createStateBucket } from '../compiler-api'
+export type { StateBucket } from '../compiler-api'
 
 // ---------------------------------------------------------------------------
 // Detection

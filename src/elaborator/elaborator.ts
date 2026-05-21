@@ -60,6 +60,15 @@ export default function elaborate(
   return { program, registry: reg, errors }
 }
 
+/**
+ * Re-elaborate a single AST node (e.g. a cloned Definition) using an existing
+ * registry. Used by &Compiler::ast::re_elaborate inside strata body handlers.
+ */
+export function elaborateSingleNode(node: any, registry: ElaboratorRegistry): any {
+  const errors: ElaborationError[] = []
+  return elaborateNode(node, registry, errors)
+}
+
 // ---------------------------------------------------------------------------
 // AST walk
 // ---------------------------------------------------------------------------

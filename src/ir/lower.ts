@@ -15,6 +15,7 @@
 import { wasmTypeOf } from '../types/types'
 import { type SiliconType } from '../types/types'
 import { type ElaboratorRegistry, lookupTypedOperator, lookupKeyword, lookupTypedKeyword, lookupDefKindEntry } from '../elaborator/registry'
+import { elaborateSingleNode } from '../elaborator/elaborator'
 import { resolveIntrinsicWasmInstr } from '../intrinsics'
 import type { FunctionSig } from '../types/typechecker'
 import type { ModuleRegistry } from '../modules/registry'
@@ -59,6 +60,8 @@ interface LowerCtx {
     freshIdCounter: { n: number }
     /** AST definitions queued by on::module_finalize for post-finalize lowering. */
     pendingDefinitions: any[]
+    /** Re-elaborate a cloned node using the current compilation registry. Set by lowerProgram. */
+    reElaborateNode: (node: any) => any
     /** The $compiler API surface exposed to strata expanders. Set after ctx creation. */
     $compiler?: CompilerAPI
 }
@@ -164,6 +167,7 @@ export function lowerProgram(
         strings: createStringAlloc(),
         freshIdCounter: { n: 0 },
         pendingDefinitions: [],
+        reElaborateNode: (node: any) => elaborateSingleNode(node, registry),
     }
     ctx.$compiler = createCompilerAPI(ctx, lowerFns)
 
