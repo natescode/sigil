@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Sigil** is a compiler for the **Silicon programming language**, targeting WebAssembly Text Format (WAT). The compiler is itself written in Silicon — there is no TypeScript, Bun, or Node host. `wasm-bin/stage1.wasm` is the checked-in bootstrap seed; it compiles its own source byte-equal as the self-host gate. The wasm runtime used by every test and by `./build.sh` is **wasmtime** (the WASI reference implementation). Wasmer's WASI compat layer has known bugs at both 2.x (mapped-dir rights) and 7.x (post-`path_open` fd corruption + Windows absolute-path stdout) — wasmtime is the only supported target.
 
-**Status:** Self-hosted.  All seven phases of the bootstrap plan are complete; `src/` (TypeScript) no longer exists.  Continued work lives in `boot/*.si`.
+**Status:** Self-hosted.  All seven phases of the bootstrap plan are complete.  **Current work target: `src/` (TypeScript compiler) only — do NOT modify `boot/` Silicon files unless explicitly asked.**  The WASM binary emitter work is being prototyped in `src/codegen/` before being ported to Silicon.
 
 ## Commands
 
